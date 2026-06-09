@@ -938,4 +938,103 @@ Hệ thống cho phép:
 
 ```
 ```
+# 7. Đóng gói và khôi phục hệ thống
 
+### Bước 1: Sao lưu toàn bộ hệ thống
+
+Thực hiện nén toàn bộ thư mục dự án để phục vụ cho việc sao lưu và di chuyển sang môi trường khác.
+
+```bash
+# Đứng tại thư mục Home
+sudo tar -czvf gold_monitor_backup.tar.gz gold-monitor/
+```
+
+#### Giải nén tệp tin backup hệ thống giá vàng
+sudo tar -xzvf gold_monitor_backup.tar.gz
+
+### Bước 2: Dừng và xóa toàn bộ container
+
+#### Truy cập vào thư mục vừa giải nén
+cd gold-monito
+
+##### Dừng toàn bộ các dịch vụ và xóa sạch container, network liên quan
+docker compose down
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/f97f904e-d970-4456-816b-379a1cc7926c" />
+
+Sau khi thực hiện lệnh trên, toàn bộ các dịch vụ:
+
+* MariaDB
+* Flask API
+* Node-RED
+* InfluxDB
+* Grafana
+* Nginx
+
+đều được dừng hoàn toàn.
+
+Truy cập giao diện Web thi web sẽ không còn hoạt động, chứng minh hệ thống đã được dọn dẹp hoàn toàn.
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/5fa21218-2525-44d2-9d4f-86df6179258c" />
+
+---
+
+### Bước 3: Khôi phục lại từ file sao lưu
+
+Giải nén lại thư mục dự án:
+
+```bash
+tar -xzvf gold_monitor_backup.tar.gz
+```
+
+Khởi động lại toàn bộ hệ thống:
+
+```bash
+cd gold-monitor
+
+docker compose up -d
+```
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/6d882646-f1d6-4ff0-a2eb-c57e7114235f" />
+
+Docker Compose sẽ tự động khởi tạo lại:
+
+* gold_mariadb
+* gold_flask
+* gold_nodered
+* gold_influxdb
+* gold_grafana
+* web_nginx
+
+Do các thư mục dữ liệu đã được lưu trữ bên ngoài container nên:
+
+* Dữ liệu MariaDB vẫn được giữ nguyên.
+* Dữ liệu lịch sử InfluxDB không bị mất.
+* Dashboard Grafana được bảo toàn.
+* Flow Node-RED vẫn giữ nguyên trạng thái trước khi sao lưu.
+
+Hệ thống được phục hồi hoàn chỉnh mà không cần cấu hình lại từ đầu.
+
+---
+
+### Bước 4: Kết quả sau khi khôi phục
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/cea1e9e5-93b7-4d0d-b8de-b67bb3814696" />
+
+Toàn bộ các chức năng tiếp tục hoạt động bình thường:
+
+* Thu thập dữ liệu giá vàng SJC.
+* Ghi dữ liệu vào MariaDB.
+* Lưu dữ liệu lịch sử vào InfluxDB.
+* Hiển thị Dashboard Web thời gian thực.
+* Trực quan hóa dữ liệu bằng Grafana.
+* Kích hoạt cảnh báo Telegram khi giá vàng vượt ngưỡng thiết lập.
+
+---
+
+# PHẦN 3: KẾT LUẬN
+Hệ thống giám sát giá vàng SJC theo thời gian thực đã được xây dựng thành công trên nền tảng Docker Compose với các thành phần Node-RED, MariaDB, InfluxDB, Flask API, Nginx và Grafana.
+
+Hệ thống cho phép thu thập dữ liệu tự động, lưu trữ đồng thời dữ liệu tức thời và dữ liệu lịch sử, trực quan hóa bằng Dashboard Web và Grafana, đồng thời hỗ trợ cơ chế cảnh báo tự động qua Telegram khi giá vàng vượt ngưỡng thiết lập.
+
+Bên cạnh đó, việc đóng gói bằng Docker giúp hệ thống dễ dàng triển khai, sao lưu và khôi phục, đáp ứng tốt yêu cầu của một hệ thống giám sát dữ liệu thời gian thực.
