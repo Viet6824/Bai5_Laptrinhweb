@@ -445,400 +445,219 @@ docker compose logs -f
 
 ## 1.1. Giới thiệu
 
-Dự án xây dựng một hệ thống giám sát và cảnh báo giá vàng 24K theo thời gian thực (Gold Price Monitor & Alert Realtime) chạy trên nền tảng Docker Container.
+Dự án xây dựng một hệ thống giám sát và cảnh báo tự động theo thời gian thực (App Monitor + Alert Data Realtime) chạy trên nền tảng Docker Container. Đối tượng giám sát thực tế được lựa chọn là dữ liệu biến động giá vàng SJC.
 
-Hệ thống có nhiệm vụ tự động thu thập giá vàng từ nguồn dữ liệu trực tuyến, lưu trữ dữ liệu tức thời và dữ liệu lịch sử, đồng thời gửi cảnh báo đến Telegram khi giá vàng tăng hoặc giảm vượt ngưỡng được thiết lập.
+Các thành phần chính trong hệ thống:
 
-Các thành phần chính của hệ thống bao gồm:
+* **Node-RED:** Trung tâm điều phối dữ liệu (ETL Workflow), thực hiện lấy dữ liệu, phân tích theo ngưỡng Thấp/Cao, ghi dữ liệu đồng thời vào MariaDB và InfluxDB, đồng thời gửi cảnh báo Telegram khi vượt ngưỡng.
 
-* **Node-RED:** Đóng vai trò trung tâm điều phối dữ liệu (ETL Workflow). Hệ thống định kỳ lấy dữ liệu giá vàng từ API, xử lý dữ liệu, ghi vào cơ sở dữ liệu và kích hoạt cảnh báo Telegram khi phát hiện biến động bất thường.
-* **MariaDB:** Cơ sở dữ liệu quan hệ dùng để lưu giá vàng mới nhất nhằm phục vụ các truy vấn thời gian thực từ giao diện Web.
-* **InfluxDB:** Cơ sở dữ liệu chuỗi thời gian dùng để lưu trữ lịch sử biến động giá vàng phục vụ việc phân tích xu hướng.
-* **Flask API:** Dịch vụ API được xây dựng bằng Python, kết nối tới MariaDB và cung cấp dữ liệu giá vàng mới nhất dưới dạng JSON.
-* **Nginx:** Web Server phục vụ giao diện Frontend và Reverse Proxy chuyển tiếp request đến Flask API.
-* **Grafana:** Công cụ trực quan hóa dữ liệu, kết nối tới InfluxDB để hiển thị biểu đồ lịch sử giá vàng theo thời gian.
-* **Telegram Bot:** Hệ thống cảnh báo tự động khi giá vàng vượt ngưỡng được cấu hình.
+* **MariaDB:** Cơ sở dữ liệu quan hệ (RDBMS) lưu trạng thái giá vàng hiện tại nhằm phục vụ truy vấn nhanh từ Web.
+
+* **InfluxDB 2.x:** Cơ sở dữ liệu chuỗi thời gian (Time-series Database) dùng lưu lịch sử biến động giá vàng.
+
+* **Flask API:** Cung cấp API REST lấy dữ liệu mới nhất từ MariaDB.
+
+* **Nginx:** Web Server phân phối giao diện Frontend và Reverse Proxy chuyển tiếp request đến Flask API.
+
+* **Grafana:** Công cụ trực quan hóa dữ liệu, kết nối InfluxDB để hiển thị biểu đồ biến động giá vàng theo thời gian.
 
 ---
 
 ## 1.2. Cấu trúc thư mục dự án
 
-```text id="g1"
+```text
 gold-monitor/
 ├── docker-compose.yml
-│
-├── nginx/
-│   ├── default.conf
-│   └── html/
-│       └── index.html
-│
 ├── flask_api/
 │   ├── Dockerfile
 │   ├── requirements.txt
 │   └── app.py
-│
+├── nginx/
+│   ├── default.conf
+│   └── html/
+│       └── index.html
+├── nodered_data/
 ├── mariadb_data/
 ├── influxdb_data/
-├── grafana_data/
-└── nodered_data/
+└── grafana_data/
 ```
 
 ---
 
-## 1.3. Danh sách Service và cổng sử dụng
+## 1.3. Danh sách Service
 
-| Tên Service   | Port Container | Port Host    | Chức năng                   |
-| ------------- | -------------- | ------------ | --------------------------- |
-| web_nginx     | 80             | 8085         | Giao diện người dùng        |
-| gold_flask    | 5000           | Không public | API giá vàng                |
-| gold_nodered  | 1880           | 1882         | Thu thập dữ liệu & Telegram |
-| gold_mariadb  | 3306           | 3309         | Dữ liệu tức thời            |
-| gold_influxdb | 8086           | 8089         | Dữ liệu lịch sử             |
-| gold_grafana  | 3000           | 3002         | Dashboard biểu đồ           |
+| Service Docker | Port Container | Port Host | Chức năng                 |
+| -------------- | -------------: | --------: | ------------------------- |
+| web_nginx      |             80 |      8085 | Frontend + Reverse Proxy  |
+| gold_flask     |           5000 |      5000 | Flask API                 |
+| gold_nodered   |           1880 |      1880 | Thu thập và xử lý dữ liệu |
+| gold_mariadb   |           3306 |      3309 | CSDL quan hệ              |
+| gold_influxdb  |           8086 |      8086 | CSDL Time-Series          |
+| gold_grafana   |           3000 |      3000 | Dashboard trực quan       |
 
-Tất cả các Service được kết nối thông qua mạng Docker nội bộ có tên:
-
-```text id="g2"
-gold_network
-```
-
-Nhờ đó các Container có thể giao tiếp với nhau thông qua tên Service thay vì địa chỉ IP.
-
-Ví dụ:
-
-```python id="g3"
-host='gold_mariadb'
-```
-
-thay vì:
-
-```python id="g4"
-host='192.168.x.x'
-```
+> Các container giao tiếp với nhau thông qua tên service Docker (ví dụ: `gold_mariadb`, `gold_influxdb`, `gold_flask`) thay vì sử dụng địa chỉ IP.
 
 ---
 
 # 2. Cấu hình hệ thống
 
-## 2.1. Cấu hình docker-compose.yml
+## 2.1. Cấu hình Docker Compose
 
-Toàn bộ hệ thống được triển khai thông qua Docker Compose.
+File:
+docker-compose.yml
 
-### Khai báo Network
 
-```yaml id="g5"
-networks:
-  gold_network:
-    driver: bridge
-```
+```yaml
+services:
 
-Network này cho phép tất cả các Service giao tiếp với nhau trong môi trường Docker.
+  gold_mariadb:
 
----
+    image: mariadb:11
 
-### Service MariaDB
+    container_name: gold_mariadb
 
-MariaDB được sử dụng để lưu dữ liệu giá vàng mới nhất.
+    restart: always
 
-```yaml id="g6"
-gold_mariadb:
-  image: mariadb:10.11
-  container_name: gold_mariadb
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_DATABASE: gold_db
 
-  environment:
-    MYSQL_ROOT_PASSWORD: rootpassword
-    MYSQL_DATABASE: gold_db
-    MYSQL_USER: gold_user
-    MYSQL_PASSWORD: gold_password
+    ports:
+      - "3309:3306"
 
-  ports:
-    - "3309:3306"
+    volumes:
+      - ./mariadb_data:/var/lib/mysql
 
-  volumes:
-    - ./mariadb_data:/var/lib/mysql
 
-  networks:
-    - gold_network
+  gold_flask:
 
-  restart: always
-```
+    build: ./flask_api
 
----
+    container_name: gold_flask
 
-### Service InfluxDB
+    restart: always
 
-InfluxDB dùng để lưu trữ dữ liệu lịch sử giá vàng.
+    depends_on:
+      - gold_mariadb
 
-```yaml id="g7"
-gold_influxdb:
-  image: influxdb:1.8
+    ports:
+      - "5000:5000"
 
-  environment:
-    - INFLUXDB_DB=gold_history
-    - INFLUXDB_ADMIN_USER=admin
-    - INFLUXDB_ADMIN_PASSWORD=adminpassword
-```
 
----
+  web_nginx:
 
-### Service Node-RED
+    image: nginx:latest
 
-Node-RED thực hiện nhiệm vụ:
+    container_name: web_nginx
 
-* Lấy dữ liệu giá vàng từ API.
-* Chuẩn hóa dữ liệu.
-* Lưu MariaDB.
-* Lưu InfluxDB.
-* Gửi Telegram Alert.
+    restart: always
 
-```yaml id="g8"
-gold_nodered:
-  image: nodered/node-red:latest
+    ports:
+      - "8085:80"
 
-  ports:
-    - "1882:1880"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
+      - ./nginx/html:/usr/share/nginx/html
 
-  volumes:
-    - ./nodered_data:/data
-```
+    depends_on:
+      - gold_flask
 
----
 
-### Service Grafana
+  nodered:
 
-Grafana dùng để hiển thị biểu đồ giá vàng theo thời gian.
+    image: nodered/node-red
 
-```yaml id="g9"
-gold_grafana:
-  image: grafana/grafana:latest
+    container_name: gold_nodered
 
-  ports:
-    - "3002:3000"
+    restart: always
 
-  environment:
-    - GF_SECURITY_ALLOW_EMBEDDING=true
-    - GF_AUTH_ANONYMOUS_ENABLED=true
-```
+    ports:
+      - "1880:1880"
 
----
+    environment:
+      - TZ=Asia/Ho_Chi_Minh
 
-### Service Flask API
+    command: >
+      npm start -- --userDir /data
 
-Flask API được build từ source code trong thư mục flask_api.
+    volumes:
+      - ./nodered_data:/data
 
-```yaml id="g10"
-gold_flask:
-  build: ./flask_api
+    depends_on:
+      - gold_mariadb
 
-  container_name: gold_flask
 
-  networks:
-    - gold_network
+  gold_influxdb:
 
-  depends_on:
-    - gold_mariadb
+    image: influxdb:2.7
 
-  restart: always
-```
+    container_name: gold_influxdb
 
----
+    restart: always
 
-### Service Nginx
+    ports:
+      - "8086:8086"
 
-Nginx phục vụ giao diện người dùng và Reverse Proxy.
+    volumes:
+      - ./influxdb_data:/var/lib/influxdb2
 
-```yaml id="g11"
-web_nginx:
-  image: nginx:latest
 
-  ports:
-    - "8085:80"
+  gold_grafana:
 
-  volumes:
-    - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
-    - ./nginx/html:/usr/share/nginx/html
+    image: grafana/grafana
 
-  depends_on:
-    - gold_flask
+    container_name: gold_grafana
+
+    restart: always
+
+    ports:
+      - "3000:3000"
+
+    volumes:
+      - ./grafana_data:/var/lib/grafana
+
+    depends_on:
+      - gold_influxdb
 ```
 
 ---
 
-## 2.2. Luồng hoạt động của hệ thống
+## 2.2. Flask API
 
-Quy trình hoạt động của hệ thống được mô tả như sau:
+### requirements.txt
 
-```text id="g12"
-API Giá Vàng
-      │
-      ▼
-  Node-RED
-      │
- ┌────┴─────┐
- ▼          ▼
-MariaDB   InfluxDB
- ▼          ▼
-Flask     Grafana
- ▼          ▼
-Nginx Dashboard
-      │
-      ▼
- Người dùng
+```txt
+Flask
+Flask-Cors
+mysql-connector-python
 ```
-
-Đồng thời Node-RED sẽ thực hiện kiểm tra các ngưỡng cảnh báo:
-
-* Giá vàng vượt 120 triệu VNĐ/lượng.
-* Giá vàng giảm xuống dưới 115 triệu VNĐ/lượng.
-
-Khi điều kiện xảy ra:
-
-```text id="g13"
-Node-RED
-    │
-    ▼
-Telegram Bot
-    │
-    ▼
-Telegram Group
-```
-
-Tin nhắn cảnh báo sẽ được gửi ngay lập tức tới nhóm quản trị.
 
 ---
 
-## Kết luận
-
-Docker là công nghệ phổ biến giúp đóng gói và triển khai ứng dụng một cách hiệu quả. Việc sử dụng Docker giúp đảm bảo tính nhất quán giữa các môi trường, giảm thời gian triển khai, tiết kiệm tài nguyên và hỗ trợ tốt cho các quy trình DevOps hiện đại.
-# 2.3. Xây dựng Flask API
-
-## 2.3.1. Giới thiệu
-
-Flask API được xây dựng nhằm cung cấp dữ liệu giá vàng mới nhất từ cơ sở dữ liệu MariaDB cho giao diện Web Dashboard.
-
-Thay vì giao diện Web truy cập trực tiếp vào cơ sở dữ liệu, toàn bộ dữ liệu sẽ được lấy thông qua REST API. Cách tiếp cận này giúp tăng tính bảo mật, dễ bảo trì và dễ mở rộng hệ thống trong tương lai.
-
-Trong dự án này Flask API thực hiện các chức năng:
-
-* Kết nối MariaDB.
-* Truy vấn giá vàng mới nhất.
-* Chuyển đổi dữ liệu sang định dạng JSON.
-* Cung cấp API cho Frontend.
-
----
-
-## 2.3.2. Cấu trúc thư mục Flask API
-
-```text
-flask_api/
-├── Dockerfile
-├── requirements.txt
-└── app.py
-```
-
-Trong đó:
-
-| File             | Chức năng                 |
-| ---------------- | ------------------------- |
-| Dockerfile       | Build Flask Container     |
-| requirements.txt | Danh sách thư viện Python |
-| app.py           | Chương trình chính        |
-
----
-
-## 2.3.3. Cài đặt thư viện
-
-File requirements.txt:
-
-```text
-flask
-flask-cors
-pymysql
-```
-
-Ý nghĩa:
-
-| Thư viện   | Chức năng                         |
-| ---------- | --------------------------------- |
-| Flask      | Xây dựng Web API                  |
-| Flask-CORS | Cho phép truy cập API từ Frontend |
-| PyMySQL    | Kết nối MariaDB                   |
-
----
-
-## 2.3.4. Kết nối MariaDB
-
-Thông tin kết nối:
-
-```python
-db_config = {
-    "host": "gold_mariadb",
-    "user": "gold_user",
-    "password": "gold_password",
-    "database": "gold_db"
-}
-```
-
-Giải thích:
-
-| Tham số  | Giá trị                          |
-| -------- | -------------------------------- |
-| host     | Tên Service MariaDB trong Docker |
-| user     | Tài khoản truy cập               |
-| password | Mật khẩu                         |
-| database | CSDL giá vàng                    |
-
----
-
-## 2.3.5. Xây dựng API lấy giá vàng mới nhất
-
-Bảng dữ liệu:
-
-```sql
-gold_live
-```
-
-Cấu trúc:
-
-```sql
-CREATE TABLE gold_live(
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    buy_price DOUBLE,
-    sell_price DOUBLE,
-    gold_price DOUBLE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-API:
+### app.py
 
 ```python
 from flask import Flask, jsonify
 from flask_cors import CORS
-import pymysql
+import mysql.connector
 
 app = Flask(__name__)
 CORS(app)
 
-db_config = {
-    "host": "gold_mariadb",
-    "user": "gold_user",
-    "password": "gold_password",
-    "database": "gold_db"
-}
-
-@app.route('/api/gold')
+@app.route("/api/gold")
 def get_gold():
 
-    conn = pymysql.connect(**db_config)
+    conn = mysql.connector.connect(
+        host="gold_mariadb",
+        user="root",
+        password="root123",
+        database="gold_db"
+    )
 
-    cursor = conn.cursor()
+    cursor = conn.cursor(dictionary=True)
 
     cursor.execute("""
-        SELECT buy_price,
-               sell_price,
-               gold_price,
-               created_at
+        SELECT *
         FROM gold_live
         ORDER BY id DESC
         LIMIT 1
@@ -846,166 +665,39 @@ def get_gold():
 
     row = cursor.fetchone()
 
+    cursor.close()
     conn.close()
 
-    return jsonify({
-        "buy_price": row[0],
-        "sell_price": row[1],
-        "gold_price": row[2],
-        "timestamp": str(row[3])
-    })
+    return jsonify(row)
 
-if __name__ == '__main__':
-    app.run(
-        host='0.0.0.0',
-        port=5000
-    )
+app.run(host="0.0.0.0", port=5000)
 ```
 
 ---
 
-## 2.3.6. Kết quả trả về
-
-Khi truy cập:
-
-```text
-http://localhost/api/gold
-```
-
-API sẽ trả về:
-
-```json
-{
-  "buy_price": 118000000,
-  "sell_price": 119000000,
-  "gold_price": 118500000,
-  "timestamp": "2026-06-08 09:30:00"
-}
-```
-
-Dữ liệu này sẽ được giao diện Dashboard sử dụng để hiển thị thông tin giá vàng theo thời gian thực.
-
----
-
-## 2.3.7. Dockerfile cho Flask API
-
-File Dockerfile:
-
-```dockerfile
-FROM python:3.11-slim
-
-WORKDIR /app
-
-COPY requirements.txt .
-
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . .
-
-EXPOSE 5000
-
-CMD ["python","app.py"]
-```
-
-Ý nghĩa các lệnh:
-
-| Lệnh    | Chức năng        |
-| ------- | ---------------- |
-| FROM    | Chọn Image gốc   |
-| WORKDIR | Thư mục làm việc |
-| COPY    | Sao chép file    |
-| RUN     | Cài thư viện     |
-| EXPOSE  | Mở cổng          |
-| CMD     | Chạy ứng dụng    |
-
-Sau khi build thành công, Flask API sẽ chạy tại:
-
-```text
-http://gold_flask:5000
-```
-
-và sẵn sàng phục vụ dữ liệu cho Nginx và Frontend.
-
----
-
-# 2.4. Cấu hình Nginx
-
-## 2.4.1. Giới thiệu
-
-Nginx được sử dụng làm Web Server cho hệ thống.
-
-Nhiệm vụ của Nginx:
-
-* Phục vụ giao diện Web Dashboard.
-* Reverse Proxy tới Flask API.
-* Quản lý kết nối HTTP.
-* Tăng hiệu năng truy cập.
-
-Mô hình hoạt động:
-
-```text
-User
- │
- ▼
-Nginx
- │
- ├────────► Frontend
- │
- ▼
-Flask API
- │
- ▼
-MariaDB
-```
-
----
-
-## 2.4.2. Cấu trúc thư mục Nginx
-
-```text
-nginx/
-├── default.conf
-└── html/
-    └── index.html
-```
-
-Trong đó:
-
-| File         | Chức năng           |
-| ------------ | ------------------- |
-| default.conf | Cấu hình Nginx      |
-| index.html   | Giao diện Dashboard |
-
----
-
-## 2.4.3. Cấu hình Reverse Proxy
+## 2.3. Reverse Proxy Nginx
 
 File:
 
 ```text
-default.conf
+nginx/default.conf
 ```
-
-Nội dung:
 
 ```nginx
 server {
 
     listen 80;
 
-    server_name localhost;
-
-    root /usr/share/nginx/html;
-
-    index index.html;
-
     location / {
-        try_files $uri $uri/ /index.html;
+
+        root /usr/share/nginx/html;
+
+        index index.html;
     }
 
     location /api/ {
 
-        proxy_pass http://gold_flask:5000/;
+        proxy_pass http://gold_flask:5000;
 
         proxy_set_header Host $host;
 
@@ -1018,532 +710,232 @@ server {
 
 ---
 
-## 2.4.4. Giải thích cấu hình
+# 3. Node-RED
 
-### listen
+Node-RED đóng vai trò là trung tâm xử lý dữ liệu.
 
-```nginx
-listen 80;
-```
-
-Nginx lắng nghe tại cổng 80.
-
----
-
-### root
-
-```nginx
-root /usr/share/nginx/html;
-```
-
-Thư mục chứa giao diện Web.
-
----
-
-### index
-
-```nginx
-index index.html;
-```
-
-Trang mặc định khi truy cập hệ thống.
-
----
-
-### location /
-
-```nginx
-location / {
-    try_files $uri $uri/ /index.html;
-}
-```
-
-Phục vụ giao diện Dashboard.
-
----
-
-### location /api/
-
-```nginx
-location /api/
-```
-
-Tiếp nhận yêu cầu API.
-
-Ví dụ:
+Luồng xử lý gồm:
 
 ```text
-http://localhost/api/gold
+Inject
+   ↓
+Function
+   ↓
+ ┌───────────────┬─────────────┐
+ ↓               ↓
+MariaDB       InfluxDB
+                   ↓
+                Switch
+             ┌────────┴────────┐
+             ↓                 ↓
+        Cảnh báo thấp      Cảnh báo cao
+             ↓                 ↓
+      Function format     Function format
+             └────────┬────────┘
+                      ↓
+                 Telegram Bot
 ```
 
 ---
 
-### proxy_pass
-
-```nginx
-proxy_pass http://gold_flask:5000/;
-```
-
-Chuyển tiếp request tới Flask API Container.
-
-Nginx sử dụng tên Service:
-
-```text
-gold_flask
-```
-
-để giao tiếp trong Docker Network.
-
----
-
-## 2.4.5. Giao diện Dashboard
-
-Trang Dashboard hiển thị:
-
-* Giá vàng 24K hiện tại.
-* Giá mua vào.
-* Giá bán ra.
-* Thời gian cập nhật cuối cùng.
-* Trạng thái tăng hoặc giảm giá.
-
-Frontend sẽ định kỳ gọi API:
+## 3.1. Function Node tạo dữ liệu
 
 ```javascript
-fetch('/api/gold')
+let price = 11850000 + Math.floor(Math.random()*50000);
+
+msg.topic =
+"INSERT INTO gold_live(gold_price) VALUES(" + price + ")";
+
+msg.payload = {
+    price: price
+};
+
+return [msg,msg];
 ```
 
-sau mỗi 30 giây để cập nhật dữ liệu mới nhất từ hệ thống.
+Output 1:
+
+* Gửi sang MariaDB.
+
+Output 2:
+
+* Gửi sang InfluxDB.
 
 ---
 
-## 2.4.6. Kiểm tra hoạt động
+## 3.2. MariaDB
 
-Sau khi chạy:
+Bảng:
 
-```bash
-docker compose up -d
+```sql
+gold_live
 ```
 
-Kiểm tra:
+Cấu trúc:
+
+```sql
+DESCRIBE gold_live;
+```
+
+```text
++------------+-----------+------+-----+---------------------+----------------+
+| Field      | Type      | Null | Key | Default             | Extra          |
++------------+-----------+------+-----+---------------------+----------------+
+| id         | int(11)   | NO   | PRI | NULL                | auto_increment |
+| buy_price  | double    | YES  |     | NULL                |                |
+| sell_price | double    | YES  |     | NULL                |                |
+| gold_price | double    | YES  |     | NULL                |                |
+| created_at | timestamp | YES  |     | current_timestamp() |                |
++------------+-----------+------+-----+---------------------+----------------+
+```
+
+---
+
+## 3.3. InfluxDB
+
+Thông số cấu hình Node InfluxDB Out:
+
+| Thuộc tính     | Giá trị                   |
+| -------------- | ------------------------- |
+| Version        | 2.0                       |
+| URL            | http://gold_influxdb:8086 |
+| Bucket         | 1                         |
+| Measurement    | gold_price                |
+| Time Precision | Milliseconds              |
+| Organization   | f1ac141d8f8116f0          |
+
+---
+
+## 3.4. Bộ lọc cảnh báo
+
+Node Switch chia thành hai nhánh:
+
+### Nhánh 1: Cảnh báo thấp
+
+Điều kiện:
+
+```text
+msg.payload < 132.32
+```
+
+---
+
+### Nhánh 2: Cảnh báo cao
+
+Điều kiện:
+
+```text
+msg.payload > 132.35
+```
+
+---
+
+## 3.5. Function tạo cảnh báo Telegram
+
+### Cảnh báo thấp
+
+```javascript
+let currentPrice = Number(msg.payload);
+
+msg.payload = {
+    chatId: -1001875746636,
+    type: 'message',
+    content:
+    `⚠️ [CẢNH BÁO THẤP]
+
+Giá vàng SJC đã giảm xuống ${currentPrice}`
+};
+
+return msg;
+```
+
+---
+
+### Cảnh báo cao
+
+```javascript
+let currentPrice = Number(msg.payload);
+
+msg.payload = {
+    chatId: -1001875746636,
+    type: 'message',
+    content:
+    `🚨 [CẢNH BÁO CAO]
+
+Giá vàng SJC đã vượt ngưỡng ${currentPrice}`
+};
+
+return msg;
+```
+
+Sau đó hai nhánh được nối chung vào một node Telegram Sender để gửi thông báo về Group Telegram.
+## 3.6: Chuẩn bị thông tin Telegram Bot
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/74aac72b-17db-41f9-a9cd-063162bfda85" />
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/f7ae0a05-5f5b-408e-bd85-78adc1c7d651" />
+
+---
+# Kết quả 
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/c50ca23a-c3fc-47b5-b665-4181faacd5ff" />
+
+# 4. Khởi động hệ thống
+
+Build toàn bộ hệ thống:
+
+```bash
+docker compose up -d --build
+```
+
+Kiểm tra trạng thái container:
 
 ```bash
 docker ps
 ```
 
-Truy cập:
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/087d11c0-01e5-4de9-85c5-75feea450e40" />
+
+# 5. Dashboard Grafana
+
+Grafana kết nối trực tiếp tới InfluxDB để hiển thị biểu đồ biến động giá vàng theo thời gian.
+
+Các dữ liệu lịch sử được lưu dưới dạng Time-Series với:
+
+* Measurement:
 
 ```text
-http://localhost:8085
+gold_price
 ```
 
-Kết quả:
-
-* Nginx hiển thị Dashboard.
-* Flask API cung cấp dữ liệu JSON.
-* MariaDB lưu dữ liệu thời gian thực.
-* Hệ thống sẵn sàng phục vụ người dùng.
-
-```
-```
-# 2.5. Thiết kế giao diện Dashboard (HTML/CSS/JavaScript)
-
-## 2.5.1. Giới thiệu
-
-Giao diện Dashboard được xây dựng nhằm cung cấp cho người dùng khả năng theo dõi giá vàng 24K theo thời gian thực thông qua trình duyệt Web.
-
-Dashboard có nhiệm vụ:
-
-* Hiển thị giá vàng hiện tại.
-* Hiển thị giá mua vào.
-* Hiển thị giá bán ra.
-* Hiển thị thời gian cập nhật gần nhất.
-* Hiển thị trạng thái tăng hoặc giảm giá.
-* Tự động cập nhật dữ liệu từ Flask API.
-
-Frontend được xây dựng bằng:
-
-* HTML5
-* CSS3
-* JavaScript (Fetch API)
-
-Không sử dụng framework để giảm độ phức tạp và phù hợp với mục tiêu học tập.
-
----
-
-## 2.5.2. Thiết kế giao diện
-
-Dashboard gồm các thành phần chính:
-
-### Header
-
-Hiển thị tên hệ thống:
+* Bucket:
 
 ```text
-GOLD PRICE MONITORING DASHBOARD
+1
 ```
+
+Dashboard Grafana được nhúng trực tiếp vào giao diện Web thông qua thẻ `iframe`, cho phép người dùng quan sát dữ liệu theo thời gian thực mà không cần đăng nhập Grafana.
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/0d4d3dcb-3237-48d0-8c52-8ed188eee90f" />
 
 ---
 
-### Card Giá Vàng
+# 6. Kết quả đạt được
 
-Hiển thị:
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/be44b318-3d1d-46b8-ad7e-fcbf3d41c6d2" />
 
-* Giá vàng 24K hiện tại
-* Giá mua vào
-* Giá bán ra
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/e83b7526-d4f3-4713-81fe-b81a4c19a7a2" />
 
----
+Hệ thống cho phép:
 
-### Card Trạng Thái
+* Thu thập dữ liệu giá vàng liên tục.
+* Lưu dữ liệu đồng thời vào MariaDB và InfluxDB.
+* Hiển thị dữ liệu thời gian thực trên Web.
+* Vẽ biểu đồ lịch sử bằng Grafana.
+* Gửi cảnh báo Telegram khi giá vàng vượt ngưỡng quy định.
+* Triển khai toàn bộ trên Docker bằng nhiều container độc lập.
+* Dễ dàng mở rộng và bảo trì.
 
-Hiển thị:
-
-* Giá tăng
-* Giá giảm
-* Không thay đổi
-
----
-
-### Card Thời Gian
-
-Hiển thị thời gian cập nhật dữ liệu mới nhất.
-
----
-
-## 2.5.3. Giao diện HTML
-
-File:
-
-```text
-nginx/html/index.html
+```
 ```
 
-Nội dung:
-
-```html
-<!DOCTYPE html>
-<html>
-
-<head>
-
-    <meta charset="UTF-8">
-
-    <title>Gold Monitor Dashboard</title>
-
-    <link rel="stylesheet" href="style.css">
-
-</head>
-
-<body>
-
-    <div class="container">
-
-        <h1>
-            GOLD PRICE MONITORING DASHBOARD
-        </h1>
-
-        <div class="card">
-
-            <h2>Giá vàng 24K</h2>
-
-            <p id="gold_price">
-                Loading...
-            </p>
-
-        </div>
-
-        <div class="card">
-
-            <h2>Giá mua vào</h2>
-
-            <p id="buy_price">
-                Loading...
-            </p>
-
-        </div>
-
-        <div class="card">
-
-            <h2>Giá bán ra</h2>
-
-            <p id="sell_price">
-                Loading...
-            </p>
-
-        </div>
-
-        <div class="card">
-
-            <h2>Trạng thái</h2>
-
-            <p id="status">
-                Waiting...
-            </p>
-
-        </div>
-
-        <div class="card">
-
-            <h2>Cập nhật lúc</h2>
-
-            <p id="timestamp">
-                Waiting...
-            </p>
-
-        </div>
-
-    </div>
-
-    <script src="script.js"></script>
-
-</body>
-
-</html>
-```
-
----
-
-## 2.5.4. Thiết kế CSS
-
-File:
-
-```text
-style.css
-```
-
-Nội dung:
-
-```css
-body {
-
-    font-family: Arial, sans-serif;
-
-    background: #f4f6f9;
-
-    margin: 0;
-
-    padding: 0;
-}
-
-.container {
-
-    width: 90%;
-
-    margin: auto;
-
-    text-align: center;
-}
-
-h1 {
-
-    margin-top: 20px;
-
-    color: #333;
-}
-
-.card {
-
-    background: white;
-
-    margin: 15px;
-
-    padding: 20px;
-
-    border-radius: 10px;
-
-    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-}
-
-.card h2 {
-
-    color: #444;
-}
-
-.card p {
-
-    font-size: 28px;
-
-    font-weight: bold;
-}
-```
-
----
-
-## 2.5.5. Xây dựng JavaScript
-
-File:
-
-```text
-script.js
-```
-
-JavaScript có nhiệm vụ:
-
-* Gọi Flask API.
-* Nhận dữ liệu JSON.
-* Cập nhật Dashboard.
-* Tự động refresh sau mỗi 30 giây.
-
----
-
-### Biến lưu giá cũ
-
-```javascript
-let previousPrice = 0;
-```
-
-Biến này được sử dụng để xác định giá tăng hay giảm.
-
----
-
-### Hàm lấy dữ liệu từ API
-
-```javascript
-async function loadGoldData() {
-
-    const response =
-        await fetch('/api/gold');
-
-    const data =
-        await response.json();
-
-    document.getElementById(
-        'gold_price'
-    ).innerHTML =
-        Number(data.gold_price)
-        .toLocaleString('vi-VN');
-
-    document.getElementById(
-        'buy_price'
-    ).innerHTML =
-        Number(data.buy_price)
-        .toLocaleString('vi-VN');
-
-    document.getElementById(
-        'sell_price'
-    ).innerHTML =
-        Number(data.sell_price)
-        .toLocaleString('vi-VN');
-
-    document.getElementById(
-        'timestamp'
-    ).innerHTML =
-        data.timestamp;
-
-    updateStatus(data.gold_price);
-}
-```
-
----
-
-### Hàm xác định trạng thái
-
-```javascript
-function updateStatus(currentPrice) {
-
-    let status =
-        document.getElementById(
-            'status'
-        );
-
-    if(previousPrice === 0){
-
-        status.innerHTML =
-            'Khởi tạo dữ liệu';
-    }
-
-    else if(currentPrice > previousPrice){
-
-        status.innerHTML =
-            'Giá tăng 📈';
-    }
-
-    else if(currentPrice < previousPrice){
-
-        status.innerHTML =
-            'Giá giảm 📉';
-    }
-
-    else{
-
-        status.innerHTML =
-            'Không thay đổi';
-    }
-
-    previousPrice =
-        currentPrice;
-}
-```
-
----
-
-### Tự động cập nhật dữ liệu
-
-```javascript
-loadGoldData();
-
-setInterval(
-
-    loadGoldData,
-
-    30000
-
-);
-```
-
-Ý nghĩa:
-
-* Khi mở Dashboard sẽ gọi API ngay lập tức.
-* Sau mỗi 30 giây hệ thống tự cập nhật dữ liệu mới.
-
----
-
-## 2.5.6. Luồng hoạt động
-
-Quá trình cập nhật dữ liệu được thực hiện như sau:
-
-```text
-Người dùng mở Dashboard
-            │
-            ▼
-       JavaScript
-            │
-            ▼
-     Fetch /api/gold
-            │
-            ▼
-       Flask API
-            │
-            ▼
-        MariaDB
-            │
-            ▼
-      Trả JSON
-            │
-            ▼
-     Cập nhật giao diện
-```
-
----
-
-## 2.5.7. Kết quả đạt được
-
-Sau khi triển khai thành công:
-
-* Người dùng truy cập địa chỉ:
-
-```text
-http://localhost:8085
-```
-
-* Dashboard hiển thị:
-
-  * Giá vàng hiện tại.
-  * Giá mua vào.
-  * Giá bán ra.
-  * Trạng thái tăng/giảm.
-  * Thời gian cập nhật.
-
-* Dữ liệu được cập nhật tự động mà không cần tải lại trang.
-
-Giao diện đơn giản, dễ sử dụng và đáp ứng tốt yêu cầu theo dõi giá vàng 24K theo thời gian thực.
